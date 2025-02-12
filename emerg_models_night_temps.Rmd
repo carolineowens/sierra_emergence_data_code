@@ -1,0 +1,419 @@
+---
+title: "Complete code for emergence abundance and biomass models"
+author: "Caroline Owens"
+date: "5/7/2022"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F)
+```
+
+```{r packages, message = F}
+library(lubridate)
+library(DHARMa)
+library(glmmTMB)
+library(car)
+library(MuMIn)
+library(ggeffects)
+library(tidyverse)
+```
+
+```{r themes, include= FALSE}
+th = theme_set(theme(legend.position = "none",
+        plot.background = element_rect(fill = "white", color = NA),
+        panel.background = element_rect(fill = "white", color = NA),
+        panel.border = element_blank(),
+        panel.grid = element_line("grey90"),
+        axis.line = element_line("gray25"),
+        axis.text = element_text(size = 12, color = "gray25"),
+        axis.title = element_text(color = "gray25"),
+        legend.text = element_text(size = 12)))
+
+trap_area = pi*((6/3.28084)/(2*pi))^2 #0.266 m2
+
+testResidualsCO = function (simulationOutput, n = 2, plot = T) 
+{
+    opar = par(mfrow = c(1, n))
+    on.exit(par(opar))
+    out = list()
+    out$uniformity = testUniformity(simulationOutput, plot = plot)
+    out$dispersion = testDispersion(simulationOutput, plot = plot)
+    out$outliers = testOutliers(simulationOutput, plot = plot)
+    #print(out)
+    #return(out)
+}
+
+testQuantilesCO = function (simulationOutput, predictor = NULL, quantiles = c(0.25, 0.5, 0.75), plot = T) 
+  {out <- plotResiduals(simulationOutput = simulationOutput,
+                        form = predictor, quantiles = quantiles, 
+                        quantreg = TRUE)
+  }
+```
+
+```{r load data quick version, message = F}
+data = read_csv("G:/My Drive/UCSB/Sierra/ch1_emergence/cleaned_data/emerg_models_2022.csv") %>% 
+  mutate(year = as_factor(year),
+         fish = as_factor(fish),
+         block = as_factor(block),
+         presence = as_factor(presence)) #%>% 
+ # select(-c(dailytemp, peaktemp))
+```
+
+Add night temps - no  longer necessary since all data has been cleaned
+```{r, eval = F}
+# nights_temps = read_csv("G:/My Drive/UCSB/Sierra/watertemp_HOBO_YSI/nights_temps.csv")
+# nights_pktmps = read_csv("G:/My Drive/UCSB/Sierra/watertemp_HOBO_YSI/nights_pktmps.csv")
+# 
+# data = data %>% 
+#   left_join(nights_temps, by = c("sample_date" = "date", "lake" = "Lake")) %>% 
+#   left_join(mutate(nights_pktmps, Year = as_factor(Year)), by = c("year" = "Year", "lake" = "Lake")) %>% 
+#   rename(dailytemp = MeanTemp)
+```
+
+
+All models should have year, DOY, dailytemp, fish, peaktemp.
+Random effect will be sampling date.
+
+# Abundance models
+Structure: truncated negative binomial with zero inflation term
+
+## Total abundance
+```{r}
+
+# model1 = glmmTMB(total ~ fish*peaktemp + dailytemp + year
+#                  + (1|DOY:year),
+#              data = data, family = nbinom2)
+# #this has some overdispersion
+
+model1 = glmmTMB(total ~ fish*peaktemp + dailytemp + year + (1|DOY:year),
+             ziformula = ~ 1,
+             data = data, family = truncated_nbinom2)
+
+testResidualsCO(model1)
+testQuantilesCO(model1)
+summary(model1)
+diagnose(model1)
+#this looks pretty good!
+# 
+# model1sub = update(model1, data = filter(data, total < 500))
+# testResidualsCO(model1sub)
+# testQuantilesCO(model1sub)
+# summary(model1sub)
+# summary(model1)
+```
+This is not sensitive to outliers (points with total > 500). Can't be calculated based on per meter square becayse would need to be scaled
+
+## Diptera abundance
+```{r}
+#dip
+model1d = glmmTMB(total_dip ~ fish*peaktemp + dailytemp + year + (1|DOY:year),
+             ziformula = ~ 1, 
+             data = data, family = truncated_nbinom2)
+
+testResidualsCO(model1d)
+testQuantilesCO(model1d) #underdispersed?
+summary(model1d)
+diagnose(model1d)
+
+```
+The same model works for diptera as for total insects.
+
+## Non diptera abundance
+```{r}
+# Initial model
+# model1n = glmmTMB(total_nd ~ fish*peaktemp + dailytemp + year + (1|DOY:year),
+#              ziformula = ~ 1,
+#              data = data, family = truncated_nbinom2)
+# 
+# #Try to improve
+# model1n2 = glmmTMB(total_nd ~ 1 + #fish*peaktemp + dailytemp + 
+#                     (1|DOY:year),
+#              ziformula = ~ fish,
+#              data = data, family = truncated_nbinom2)
+# 
+# model1n3 = glmmTMB(total_nd ~ 1 + (1|DOY),
+#              ziformula = ~ fish,
+#              data = data, family = truncated_nbinom2)
+
+# AICc(model1n, model1n2, model1n3) #simple w fish inflation is best
+model1n = glmmTMB(total_nd ~ 1 + (1|DOY:year),
+             ziformula = ~ fish,
+             data = data, family = truncated_nbinom2)
+
+testResidualsCO(model1n)
+testQuantilesCO(model1n)
+summary(model1n)
+diagnose(model1n)
+
+```
+
+Truncated zero-inflated negative binomial model shows no important predictors of non diptera abundance, although zeros are much more prevalent in lakes with fish. 
+
+# Biomass models
+
+Since negative binomial could not be used for non count responses, I used Gaussian family to describe total biomass.
+Log transformation of the response was necessary to fit Gaussian assumptions.
+All models had sampling date as a random effect and included fish*peaktemp, dailytemp, and year as predictors. If the interaction effect was not significant, it was dropped from the model to let other terms be more accurately represented.
+
+## Total biomass
+```{r}
+data %>%
+#  filter(tot_mass< 400) %>% 
+ggplot()+
+  geom_jitter(aes(x=peaktemp, y=tot_mass, color = fish))+
+  facet_wrap(~fish)
+
+model2 = glmmTMB(log(tot_mass+1) ~ fish*peaktemp+dailytemp+year+ (1|DOY:year),
+                data = data, family = gaussian)
+
+
+testQuantilesCO(model2)
+testResidualsCO(model2, n=3)
+summary(model2)
+diagnose(model2)
+
+```
+
+Fish is the most important predictor of biomass, but warmer peak water temperatures also reduce biomass. Biomass follows a seasonal pattern with positive association to daily temperature. The interaction between fish and temperature is mildly important.
+
+## Diptera biomass
+
+```{r}
+model2d = glmmTMB(log(tot_dip_mass+1) ~ fish*peaktemp + dailytemp + year + (1|DOY:year), data = data, family = gaussian)
+
+testResidualsCO(model2d, n=3)
+testQuantilesCO(model2d)
+summary(model2d)
+diagnose(model2d)
+
+# mod2b = update(model2d, data = filter(data, tot_mass < 400))
+# testQuantiles(mod2b) #still OK
+# summary(mod2b)
+```
+
+For Diptera biomass fish, temperature, and their interaction are all important. This is not sensitive to outliers.
+
+## Non diptera biomass
+
+```{r visualize non dip}
+data %>%
+  filter(tot_nd_mass > 0) %>% 
+ggplot()+
+  geom_jitter(aes(x=peaktemp, y = tot_nd_mass))+
+  facet_grid(cols = vars(fish))
+
+model2nd = glmmTMB(log(tot_nd_mass+1) ~ fish+peaktemp + dailytemp + (1|DOY:year), 
+                   ziformula = ~fish, data = data, family = gaussian)
+testResidualsCO(model2nd, n=3)
+testQuantilesCO(model2nd) #, predictor = data$fish)
+summary(model2nd)
+diagnose(model2nd)
+
+```
+1. seems like fish determines zero-inflation and temp is important predictor of mass.
+
+We therefore try a hurdle model fit to predict the occurrence of non Diptera and then, when they are present, their biomass.
+
+### Occurrence 
+```{r}
+
+#Use hurdle model
+mod2a = glmmTMB(presence ~ fish + (1|DOY:year), data = data, family = binomial)
+
+testResidualsCO(mod2a)
+testQuantilesCO(mod2a)#, predictor = data$dailytemp)
+summary(mod2a)
+diagnose(mod2a)
+```
+
+### Biomass
+
+```{r}
+#Now model just the present samples
+model2n_b = glmmTMB(log(tot_nd_mass) ~ fish+peaktemp + dailytemp + (1|DOY:year), data = filter(data, presence ==1), family = gaussian)
+
+testResidualsCO(model2n_b, n=3)
+testQuantilesCO(model2n_b)
+summary(model2n_b)
+diagnose(model2n_b)
+# mod2b = glmmTMB(log(tot_nd_vol) ~ peaktemp + dailytemp + year + (1|DOY:year),
+#                 data = filter(vol_cl, presence ==1), family = gaussian)
+# diagnose(mod2b)
+```
+
+The occurrence of non Diptera is predicted only by fish presence. Where non Diptera do occur, their biomass is higher in warm lakes and lower in the warmest part of the season.
+
+# Body size
+
+## Mean over all insects
+```{r}
+
+model3 = glmmTMB(log(tot_per) ~ fish+peaktemp + dailytemp  + (1|DOY:year), 
+                 dispformula = ~ DOY,
+                 data = filter(data, tot_per != 0 & tot_per < 10), family = gaussian)
+
+testResidualsCO(model3, n=3)
+testQuantilesCO(model3) #, predictor =  filter(data, tot_per != 0& tot_per < 10)$dailytemp)
+summary(model3)
+
+mod3a = glmmTMB(log(tot_per) ~ fish+peaktemp + dailytemp + (1|DOY:year), 
+                 dispformula = ~DOY,
+                 data = filter(data, tot_per != 0), family = gaussian)
+
+testResidualsCO(mod3a, n=3)
+testQuantilesCO(mod3a)
+summary(mod3a)
+```
+
+Fish and temperature, but not their interaction, determine body size. This is not sensitive to outliers.
+
+## Diptera body size
+
+```{r}
+
+model3d = glmmTMB(log(dip_per) ~  peaktemp+dailytemp + (1|DOY:year),
+                 dispformula = ~DOY,
+                 data = filter(data, dip_per != 0), family = )
+
+model3d = glmmTMB(sqrt(dip_per) ~ fish+peaktemp+dailytemp+ (1|DOY:year),
+                 dispformula = ~DOY,
+                 data = filter(data, dip_per != 0), family = gaussian)
+
+testResidualsCO(model3d, n=3)
+testQuantilesCO(model3d) #, predictor = filter(data, dip_per != 0)$DOY)
+summary(model3d)
+diagnose(model3d)
+```
+Temperature and seasonality, but not fish presence, determine diptera body size.
+
+## Non-diptera body size
+
+```{r}
+model3nd = glmmTMB(log(nd_per) ~ fish+peaktemp + dailytemp + (1|DOY:year), 
+                 dispformula = ~1,
+                 data = filter(data, nd_per != 0), family = gaussian)
+
+testResidualsCO(model3nd, n=3)
+testQuantilesCO(model3nd)
+summary(model3nd)
+```
+
+Fish and temperature, but not their interaction, determine the body size of non-dipterans.
+
+# Effects plots
+
+## Run effects models  
+I used ggemmeans() to calculate marginal effects for each model.
+
+```{r, message = F}
+library(emmeans)
+p1 = ggemmeans(model1, terms = ~peaktemp*fish) #total abundance
+p2 = ggemmeans(model2, terms = ~peaktemp*fish, back.transform = F) #total biomass
+p4 = ggemmeans(model3d, terms = ~peaktemp+fish)#, back.transform = F) #dip size
+p3n = ggemmeans(model3nd, terms = ~peaktemp+fish) #nondip size
+
+emmeans(model1, ~peaktemp*fish, cov.reduce = range, type = "response")
+emmeans(model1, ~peaktemp, cov.reduce = range)
+
+emmeans(model2, ~peaktemp*fish, cov.reduce = range, type = "response")
+
+emmeans(model3d, ~peaktemp*fish, cov.reduce = range, type = "response")
+
+emmeans(model3nb, ~peaktemp*fish, cov.reduce = range, type = "response")
+
+#calculate average points
+test = data %>% 
+  group_by(peaktemp, fish) %>% 
+  summarise(tot_m2 = mean(tot_m2),
+            tot_mass = mean(tot_mass),
+            size_dip= mean(dip_per[dip_per!=0]),
+            size_nd= mean(nd_per[nd_per!=0])) %>%
+  replace_na(list(size_nd = 0)) %>% 
+  pivot_longer(cols = c(size_dip, size_nd), names_to = "taxa", values_to = "size") %>% 
+  mutate(taxa = case_when(taxa == "size_dip" ~ "Diptera",
+                          taxa == "size_nd" ~ "Ephem. + Trich."))
+#Calculate reduction
+# ggpredict(model2, terms = "peaktemp")
+# (19.34-5.84)/19.34
+```
+
+## Combined plots (for figure)
+```{r, fig.height= 9}
+#total biomass
+#model2$call #log(tot_vol + 1)
+a = ggplot(p2, aes(x = x, y = (exp(predicted)-1)/trap_area))+
+  geom_ribbon(aes(fill = group, ymin = (exp(conf.low)-1)/trap_area, 
+                   ymax = (exp(conf.high)-1)/trap_area), alpha = 0.2)+
+  scale_fill_manual(values = c("purple", "black"), name = "Fish", 
+                    labels = c("Absent", "Present"))+
+  geom_line(aes(color = group, lty = group), cex = 1)+
+  scale_linetype_manual(values = c(2,1), name = "Fish", labels = c("Absent", "Present")) + 
+  scale_color_manual(values = c("purple", "black"), name = "Fish", labels = c("Absent", "Present"))+
+  labs(x = "", y = expression(atop("Predicted emerging",paste("biomass (", mg~m^-2~day^-1,")"))))+
+  geom_point(data = test, aes(x = peaktemp, y = tot_mass, color = factor(fish)))+
+  theme(axis.text = element_text(color = "black"), 
+        text = element_text(color = "black"))
+
+#a
+
+#body size
+#p4, p3n complete the backtransform (exp)
+body_sz_eff_dat = p4 %>% 
+  mutate(taxa = "Diptera") %>% 
+  bind_rows(mutate(p3n, taxa = "Ephem. + Trich."))
+
+b = ggplot(body_sz_eff_dat, aes(x = x, y = predicted))+
+  facet_wrap(~taxa, scales = "free_y")+
+   geom_ribbon(aes(fill = group, ymin = conf.low, 
+                   ymax = conf.high), alpha = 0.2)+
+  scale_fill_manual(values = c("purple", "black"), name = "Fish", 
+                    labels = c("Absent", "Present"))+
+  geom_line(aes(color = group, lty = group), cex = 1)+
+  #stat_smooth(aes(color = group, lty = group), method = "lm", se = F)+
+  scale_linetype_manual(values = c(2,1), name = "Fish", labels = c("Absent", "Present")) + 
+  scale_color_manual(values = c("purple", "black"), name = "Fish", labels = c("Absent", "Present"))+
+  labs(x = "", y = expression(atop("Predicted biomass",paste("per insect (mg)"))))+
+  theme(axis.title.y = element_text(vjust = 3.5,angle = 90))+
+  geom_point(data = test, aes(x = peaktemp, y = size, color = factor(fish)))+
+  theme(axis.text = element_text(color = "black"), 
+        text = element_text(color = "black"))
+b
+
+#diptera abundance
+c = ggplot(p1, aes(x = x, y = predicted/trap_area))+
+  #coord_cartesian(ylim = c(1,NA))+
+  scale_y_log10()+
+  geom_line(aes(color = group, lty = group), cex = 1)+
+  geom_ribbon(aes(ymin = conf.low/trap_area, ymax = conf.high/trap_area, fill = group), alpha = 0.2)+
+  scale_fill_manual(values = c("purple", "black"), name = "Fish", 
+                    labels = c("Absent", "Present"))+
+  scale_linetype_manual(values = c(2,1), name = "Fish", labels = c("Absent", "Present")) + 
+  scale_color_manual(values = c("purple", "black"), name = "Fish", labels = c("Absent", "Present"))+
+  labs(x = expression(Peak~Water~Temperature~`(`*degree*C*`)`), 
+       y = expression(atop("Predicted emerging", paste("insects (# ",m^-2~day^-1,")"))))+
+       #y = expression(Predicted~insects~`(#`~m^-2*`)`))+
+  geom_point(data = test, aes(x = peaktemp, y = tot_m2, color = factor(fish)))+
+  theme(axis.text = element_text(color = "black"), 
+        text = element_text(color = "black"))
+c  
+
+l = cowplot::get_legend(c+  theme(legend.position = "top",
+        legend.key = element_rect(fill = NULL, line = 0),
+        legend.justification = c(.7,1),
+        legend.key.width = unit(1,"cm")))
+
+fig2 = cowplot::plot_grid(l,a,NULL,b,NULL,c, align = "hv", axis = "l", 
+                   ncol = 1, rel_heights = c(.2,1,-.1,1,-.1,1))+
+  cowplot::panel_border(remove = T)+
+  theme(plot.background = element_rect(fill = "white", color = "white"))
+
+fig2
+ggsave("figures/figure2.png", fig2, width = 4, height = 6, units = "in")
+```
+

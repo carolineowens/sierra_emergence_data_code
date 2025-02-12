@@ -1,0 +1,351 @@
+---
+title: "slip_data_viewing"
+author: "Caroline Owens"
+date: "5/25/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("G:/My Drive/UCSB/Sierra/SLIP_data")
+```
+
+SLIP data is available from EDI: https://portal.edirepository.org/nis/mapbrowse?scope=edi&identifier=577
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+lakes = read_csv("data/Lake.csv")
+lakes_sub = lakes %>% 
+  select(-c(lake_drainage_name, lake_quad_name, lake_county_name, lake_juris_name, lake_wilderness_name))
+
+frogs = read_csv("data/Amphibian.csv")
+
+frogs_sub = frogs %>% 
+  filter(amphibian_state== "Alive", amphibian_life_stage != "EggMass") %>% 
+  select(-c(amphibian_location, amphibian_voucher, amphibian_state)) %>% 
+  mutate(amphibian_life_stage = case_when(amphibian_life_stage == "SubAdult" ~ "Adult",
+                                          T~amphibian_life_stage)) %>% 
+  pivot_wider(names_from = c(amphibian_species), values_from = amphibian_number, values_fn = sum, values_fill = 0)
+
+zCounts = read_csv("data/ZooplanktonSpeciesCounts.csv")
+zNames = read_csv("data/ZooplanktonSpeciesName.csv")
+zLengths = read_csv("data/ZooplanktonSpeciesLengths.csv") %>% 
+  group_by(lake_id, survey_date, SpeciesID) %>% 
+  summarize(length = mean(Length)) 
+
+
+zoops = zCounts %>% 
+  select(-Subsample) %>% 
+  pivot_wider(names_from = SpeciesID, values_from = Number, values_fn = mean, values_fill = 0, names_prefix = "sp_")
+
+
+```
+
+# Figure out appropriate range of lake elevations
+```{r}
+lakes_sub %>% 
+  filter(lake_id %in% c(50219, 50185, 50139, 50166, 51053, 51083))
+```
+Square - 50219
+
+Mesa - 50185
+
+Lower Desolation - 50139
+
+Humphreys - 50166
+
+No Good - 51053
+
+Marmot - 50183
+
+
+# Plot patterns of amphibian taxa over elevation
+```{r}
+
+frog_dat = frogs_sub %>% 
+  left_join(lakes_sub) %>% 
+  na.omit() %>% 
+  filter(lake_elevation_nbr > 3000)
+
+hyre = ggplot(frog_dat)+
+  scale_x_continuous(limits = c(3000,3700))+ 
+  geom_vline(xintercept = 3400)+
+  labs(x = "Lake elevation (m)", y = "Hyla regilla")+
+  theme(axis.title.y = element_text(face = "italic", angle = 90))+
+  geom_point(aes(x=lake_elevation_nbr, y = HYRE))+
+  facet_wrap(~amphibian_life_stage, scales = "free_y")#tree frog - tadpoles maybe predatory but adults disperse into terrestrial
+
+ramu = ggplot(frog_dat)+
+  scale_x_continuous(limits = c(3000,3700))+ 
+  geom_vline(xintercept = 3400)+
+  labs(x = "Lake elevation (m)", y = "Rana mucosa")+
+  theme(axis.title.y = element_text(face = "italic", angle = 90))+
+  geom_point(aes(x=lake_elevation_nbr, y = RAMU))+
+  facet_wrap(~amphibian_life_stage, scales = "free_y") #MYLF
+
+thel = ggplot(frog_dat)+
+  scale_x_continuous(limits = c(3000,3700))+ 
+  scale_y_continuous(limits = c(0,6))+
+  geom_vline(xintercept = 3400)+
+  labs(x = "Lake elevation (m)", y = "Thamnophis elegans")+
+  theme(axis.title.y = element_text(face = "italic", angle = 90))+
+  geom_point(aes(x=lake_elevation_nbr, y = THEL)) #garter snake
+
+buco = ggplot(filter(frog_dat, BUCA < 10000))+
+  scale_x_continuous(limits = c(3000,3700))+ 
+  scale_y_log10()+
+  geom_vline(xintercept = 3400)+
+  labs(x = "Lake elevation (m)", y = "Bufo canorus")+
+  theme(axis.title.y = element_text(face = "italic", angle = 90))+
+  geom_point(aes(x=lake_elevation_nbr, y = BUCA+1))+
+  facet_wrap(~amphibian_life_stage, scales = "free_y")  #yose toad - look at adults but also not as relevant as they more use meadows
+
+```
+
+```{r, fig.show='hold', out.width="50%"}
+hyre; ramu; thel; buco
+```
+
+# Frog regressions
+```{r}
+hyre_A = lm(log(HYRE+1)~ lake_elevation_nbr, data = filter(frog_dat, amphibian_life_stage == "Adult" & lake_elevation_nbr >= 3400))
+summary(hyre_A) #not significant
+
+hyre_T = lm(log(HYRE+1)~ lake_elevation_nbr, data = filter(frog_dat, amphibian_life_stage == "Tadpole" & lake_elevation_nbr >= 3400))
+summary(hyre_T) #significant decrease
+
+ramu_A = lm(log(RAMU+1)~ lake_elevation_nbr, data = filter(frog_dat, amphibian_life_stage == "Adult" & lake_elevation_nbr >= 3400))
+summary(ramu_A) #NS
+
+ramu_T = lm(log(RAMU+1)~ lake_elevation_nbr, data = filter(frog_dat, amphibian_life_stage == "Tadpole" & lake_elevation_nbr >= 3400))
+summary(ramu_T) #significant increase
+
+buco_A = lm(log(BUCA+1)~ lake_elevation_nbr, data = filter(frog_dat, amphibian_life_stage == "Adult" & lake_elevation_nbr >= 3400))
+summary(buco_A) #sig decrease
+
+buco_T = lm(log(BUCA+1)~ lake_elevation_nbr, data = filter(frog_dat, amphibian_life_stage == "Tadpole" & lake_elevation_nbr >= 3400))
+summary(buco_T) #sig decrease
+
+thel_all = lm(log(THEL+1)~ lake_elevation_nbr, data = filter(frog_dat, lake_elevation_nbr >= 3400))
+summary(thel_all) #NS
+```
+
+Hyla regilla tadpoles (F_(1,451) = 9.048, p = 0.00278) (a potential predator), Yosemite toad adults (F_(1,482) = 9.704, p = 0.00195) (a potential predator), and Yosemite toad tadpoles (F_(1,451) = 4.953, p = 0.0266) (a grazer) all increased at lower elevations within the range in our study lakes. Rana muscosa tadpoles decreased significantly at lower elevations within that range (F_(1,451) = 8.464, p = 0.00380) (a potential predator, particularly of smaller insects, and grazer).
+
+# Zooplankton information
+
+```{r}
+zoop_dat = zoops %>% 
+  left_join(lakes_sub) %>% 
+  pivot_longer(cols = 3:40, names_prefix = "sp_", names_to = "SpeciesID") %>% 
+  left_join(mutate(zNames, SpeciesID = as.character(SpeciesID)))
+
+znl = zNames$Species_Name
+names(znl) = zNames$SpeciesID
+
+zoop_dat %>% 
+  filter(lake_elevation_nbr >= 3000) %>% 
+ggplot()+
+  geom_point(aes(x=lake_elevation_nbr, y = value))+
+  facet_wrap(~SpeciesID, scales = "free_y", labeller = as_labeller(znl))+
+  scale_x_continuous(limits = c(3000,3800)) + 
+  labs(x = "Lake elevation (m)", y = "Abundance")+
+  geom_vline(xintercept = 3400)
+```
+
+```{r}
+zoop_dat %>% 
+  filter(lake_elevation_nbr >= 3400) %>% 
+ggplot()+
+  geom_point(aes(x=lake_elevation_nbr, y = value))+
+  facet_wrap(~SpeciesID, scales = "free_y", labeller = as_labeller(znl))+
+  scale_x_continuous(limits = c(3400,3800)) + 
+  labs(x = "Lake elevation (m)", y = "Abundance")
+
+zoop_dat %>% 
+  filter(lake_elevation_nbr >= 3400,
+         SpeciesID %in% c(1,12,16,17,18,2,3,35,36,37,40,44)) %>% #13, 7,4
+  mutate(sig = case_when(SpeciesID %in% c(1,12,37,40) ~ "Yes",
+                         T ~ "No")) %>% 
+  ggplot(aes(x=lake_elevation_nbr, y = value))+
+  geom_point()+
+  facet_wrap(~SpeciesID, scales = "free_y", labeller = as_labeller(znl))+
+  scale_x_continuous(limits = c(3400,3800)) + 
+  labs(x = "Lake elevation (m)", y = "Abundance")+
+  geom_smooth(method = "lm", formula = y~x, aes(linetype = sig), color = "skyblue")+
+  scale_linetype_manual(values = c("Yes"=1, "No"=0), guide = "none")+
+  #scale_y_log10()+
+  theme_minimal()+
+  theme(panel.grid = element_blank(),
+        axis.line = element_line(),
+        strip.text = element_text(size = 14, face = "italic"),
+        axis.text = element_text(color = "black", size =12),
+        axis.title = element_text(size = 18),
+        plot.background = element_rect(fill = "white", colour = "white"))
+ggsave("G:/My Drive/UCSB/Sierra/ch1_emergence/figures/SLIP.png", width = 13, height = 9, units = "in")
+
+test = zoop_dat %>% 
+  filter(lake_elevation_nbr >= 3400,
+         SpeciesID %in% c(1,12,16,17,18,2,3,35,36,37,40,44, 13, 7, 4)) %>%#13,7,4
+  dplyr::select(-c(3:5)) %>% 
+  left_join(mutate(zNames, SpeciesID = as.character(SpeciesID))) %>% 
+  group_by(Species_Name)
+
+#straight LM
+test1 = test %>%
+  group_map(~summary(lm(value~lake_elevation_nbr, data = .)))
+names(test1) = unique(test$Species_Name)
+test1 = test1 %>%
+  transpose()
+
+lm_sig = tibble(unit = test1$coefficients,
+               res = test1$residuals,
+               Species_Name = unique(test$Species_Name))%>%
+  mutate(coef = unname(map_dbl(unit, ~as_vector(.x[2,1]))),
+         abs_co = abs(coef),
+         pval = unname(map_dbl(unit, ~as_vector(.x[2,4]))),
+         norm = unname(map_dbl(res, ~shapiro.test(.)$p.value))) %>%
+  select(-unit, -res) %>%
+  filter(pval <= 0.05) %>% 
+  left_join(zNames)
+
+
+# #log trans
+# test1 = test %>% 
+#   group_map(~summary(lm(log(value+1)~lake_elevation_nbr, data = .)))
+# names(test1) = unique(test$Species_Name)
+# test1 = test1 %>% 
+#   transpose()
+# 
+# log_sig = tibble(unit = test1$coefficients,
+#                res = test1$residuals,
+#                names = unique(test$Species_Name))%>% 
+#   mutate(coef = unname(map_dbl(unit, ~as_vector(.x[2,1]))),
+#          abs_co = abs(coef),
+#          pval = unname(map_dbl(unit, ~as_vector(.x[2,4]))),
+#          norm = unname(map_dbl(res, ~shapiro.test(.)$p.value))) %>% 
+#   select(-unit, -res) %>% 
+#   filter(pval <= 0.05)
+
+
+#square
+# test1 = test %>% 
+#   group_map(~summary(lm(sqrt(value)~lake_elevation_nbr, data = .)))
+# names(test1) = unique(test$Species_Name)
+# test1 = test1 %>% 
+#   transpose()
+
+# lsq_sig = tibble(unit = test1$coefficients,
+#                res = test1$residuals,
+#                names = unique(test$Species_Name))%>% 
+#   mutate(coef = unname(map_dbl(unit, ~as_vector(.x[2,1]))),
+#          abs_co = abs(coef),
+#          pval = unname(map_dbl(unit, ~as_vector(.x[2,4]))),
+#          norm = unname(map_dbl(res, ~shapiro.test(.)$p.value))) %>% 
+#   select(-unit, -res) %>% 
+#   filter(pval <= 0.05)
+```
+
+Daphnia melanica and dentata
+Hesperodiaptomus shoshone (copepod)
+Leptodiaptomus signicauda (copepod)
+Keratella (?) (rotifer)
+
+# Combined data
+```{r}
+dat_a = zoop_dat %>% 
+  select(Species_Name, number = value, elev = lake_elevation_nbr,
+         lake_id, survey_date)
+
+dat_b = frog_dat %>% 
+  select(-c(BUBO:lake_type_code, THEL)) %>% 
+  pivot_longer(HYRE:BUCA, names_to = "species", values_to = "number") %>% 
+  unite(Species_Name, species, amphibian_life_stage) %>%
+  rename(elev = lake_elevation_nbr)
+
+dat_all = bind_rows(dat_a, dat_b) %>% 
+  filter(elev >= 3200 & elev <= 4000,
+         Species_Name != "standard measurement")%>% 
+  group_by(Species_Name)
+
+#remove few observation taxa
+x =dat_all %>%
+  group_by(Species_Name, number != 0) %>% 
+             summarise(n = n()) %>% 
+  filter(`number != 0` == TRUE,
+         n < 10)
+
+dat_all = dat_all  %>%
+  filter(!(Species_Name %in% x$Species_Name)) %>% 
+  mutate(amphi = case_when(Species_Name %in% c("BUCA_Tadpole", "BUCA_Adult", "HYRE_Tadpole", "HYRE_Adult", "RAMU_Tadpole", "RAMU_Adult") ~ "Yes",
+                           T ~ "No"))
+
+dat = dat_all %>%
+  split(.,f = .$Species_Name) %>%
+  map(~summary(lm(number~elev, data = .)))%>% 
+  transpose()
+
+lm_out = tibble(unit = dat$coefficients,
+                fstat = dat$fstatistic)%>%
+  mutate(coef = unname(map_dbl(unit, ~as_vector(.x[2,1]))),
+         abs_co = abs(coef),
+         pval = unname(map_dbl(unit, ~as_vector(.x[2,4]))),
+         names = names(unit),
+         fst = unname(map_dbl(fstat, ~as_vector(.x[1]))),
+         df = unname(map_dbl(fstat, ~as_vector(.x[3])))) %>%
+  select(-unit, -fstat)# %>%
+  #filter(pval <= 0.05)
+
+holm = na.omit(lm_out) %>% 
+  arrange(pval) %>% 
+  mutate(j = 1:23,
+         hj = 0.05/(24-j),
+         condition = case_when(pval > hj ~ TRUE,
+                               T ~ FALSE),
+         reject_null = case_when(pval < min(pval[condition==TRUE]) ~ TRUE,
+                                 T ~ FALSE)) %>% 
+  filter(reject_null == TRUE) %>% 
+  select(-c(j:reject_null))
+
+lm_out = filter(lm_out,
+                pval < 0.05)
+```
+
+Plot combined
+
+```{r}
+for (c in c("Yes", "No")){
+p = dat_all %>%
+  mutate(sig = case_when((Species_Name %in% holm$names) ~ "Yes",
+                         T ~ "No")) %>% 
+  filter(Species_Name %in% na.omit(lm_out)$names,
+         !(Species_Name %in% c("Chaoborus trivitattus", "Daphnia pulex/pulicaria", "Simocephalus serrulatus", "nauplii")),
+         amphi == c) %>% 
+ggplot(aes(x=elev, y = number))+
+  geom_point()+
+  facet_wrap(~Species_Name, scales = "free_y")+
+ # scale_x_continuous(limits = c(3200,4000)) + 
+  labs(x = "Lake elevation (m)", y = "Abundance")+
+  geom_smooth(method = "lm", formula = y~x, aes(linetype = sig), color = "coral2")+
+  scale_linetype_manual(values = c("Yes"=1, "No"=0), guide = "none")+
+  scale_y_log10()+
+  theme_minimal()+
+  scale_x_continuous(limits = c(3200, 3600))+
+  theme(panel.grid = element_blank(),
+        axis.line = element_line(),
+        strip.text = element_text(size = 14, face = "italic"),
+        axis.text = element_text(color = "black", size =12),
+        axis.title = element_text(size = 18),
+        plot.background = element_rect(fill = "white", colour = "white"),
+        )
+ggsave(paste0("G:/My Drive/UCSB/Sierra/ch1_emergence/figures/fig4_",c,".png"),p,
+       width = 8, height = 6, units = "in")
+}
+
+```
+
